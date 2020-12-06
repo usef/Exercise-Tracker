@@ -51,9 +51,9 @@ app.post('/api/exercise/new-user', (req, res) => {
   });
 });
 
-app.get('/api/exercise/users', (req, res) => {
+app.get('/api/exercise/users', async (req, res) => {
   try {
-    User.find({}, (err, data) => {
+    await User.find({}, (err, data) => {
       if (err) {
         console.log(err);
       } else if (data) {
@@ -80,40 +80,23 @@ app.post('/api/exercise/add', async (req, res) => {
       reqBody.date = date;
     }
 
-    await User.findOneAndUpdate({
-      _id: reqBody.userId
-    }, {
-        $push: {
-          log: {
-            description: reqBody.description,
-            duration: reqBody.duration,
-            date: reqBody.date
-          }
-        }
-      }, (err) => {
-        if (err) {
-          console.log(err);
-        }
-      }).exec();
-
-    await User.findOne({ _id: reqBody.userId }, (err, data) => {
-      if (err) {
-        console.log(err);
-      } else if (data) {
-        if (data.log.length == 0) {
-
-        } else {
-          res.json({
-            _id: data._id,
-            username: data.username,
-            date: getDateFormat(data.log[data.log.length - 1].date),
-            duration: data.log[data.log.length - 1].duration,
-            description: data.log[data.log.length - 1].description
-          });
-        }
-
-      }
+    const user = await User.findOne({_id: reqBody.userId});
+    user.log.push({
+      description: reqBody.description,
+      duration: reqBody.duration,
+      date: reqBody.date
     });
+
+    const result = await user.save();
+
+    return res.json({
+      _id: result._id,
+      username: result.username,
+      date: getDateFormat(result.log[result.log.length - 1].date),
+      duration: result.log[result.log.length - 1].duration,
+      description: result.log[result.log.length - 1].description
+    });
+
   } catch (e) {
     console.log(e);
   }
@@ -123,7 +106,7 @@ app.get('/api/exercise/log', async (req, res) => {
   const query = req.query;
   const id = query.userId;
   if(!id){
-    return res.send(400, "Unknown userId");
+    return res.status(400, "Unknown userId");
   }
   const lims = {
     frm: query.from,
@@ -131,84 +114,75 @@ app.get('/api/exercise/log', async (req, res) => {
     limit: query.limit
   }
 
-  const user = await User.findOne({_id: id});
+  try{
+    const user = await User.findOne({_id: id});
 
-  if(!user){
-    res.json({
-      error: "User not found"
+    if(!user)
+      return res.json({error: "User not found"});
+    
+    //Sort the logs
+    user.log = user.log.sort((a, b) => {
+      let comparison = 0;
+      if(a.date > b.date){
+        comparison = 1;
+      } else if(a.date < b.date){
+        comparison = -1;
+      }
+      return comparison * -1;
     });
-  } else {
-    if (query.hasOwnProperty('from') || query.hasOwnProperty('to') || query.hasOwnProperty('limit')) {
-      if(query.hasOwnProperty('limit') && !Number.isInteger(lims.limit)){
+    
+    if(query.hasOwnProperty('from')){
+      if(!lims.frm.match(/\d{4}-\d{2}-\d{2}/))
+        return res.json({error: "you should enter a correct date"});
+      else
+        user.log = user.log.filter(exercise => new Date(exercise.date) >= new Date(lims.frm));
+    } 
+
+    if(query.hasOwnProperty('to')){
+      if(!lims.to.match(/\d{4}-\d{2}-\d{2}/))
+        return res.json({error: "enter a correct date"});
+      else
+        user.log = user.log.filter(exercise => new Date(exercise.date) <= new Date(lims.to));    
+    }
+
+    if(query.hasOwnProperty('limit')){
+      if(!Number.isInteger(parseInt(lims.limit)))
         return res.json({
           error: "limit should be a number"
         });
-      }
-
-      if(query.hasOwnProperty('from') && !lims.frm.match(/\d{4}-\d{2}-\d{2}/)){
-        return res.json({
-          error: "you should enter a correct date"
-        });
-      }
-
-      if(query.hasOwnProperty('to') && !lims.to.match(/\d{4}-\d{2}-\d{2}/)){
-        return res.json({
-          error: "you should enter a correct date"
-        });
-      }
-
-      if(lims.limit == NaN)
-        lims.limit = undefined;
-  
-      if(lims.frm){
-        user.log = user.log.filter(exercise => new Date(exercise.date) > new Date(lims.frm));
-      }
-  
-      if(lims.to){
-        user.log = user.log.filter(exercise => new Date(exercise.date) < new Date(lims.to));    
-      }
-  
-      if(lims.limit){
+      else
         user.log = user.log.slice(0, lims.limit);
-      }
-      
-      res.json({
-        _id: user._id,
-        username: user.username,
-        count: user.log.length,
-        log: user.log
-          .map(exercise => {
-            return {
-              description: exercise.description,
-              duration: exercise.duration,
-              date: getDateFormat(exercise.date)
-            };
-          })
-      });
-  
-    } else {
-      res.json({
-        _id: user._id,
-        username: user.username,
-        count: user.log.length,
-        log: user.log
-          .map(exercise => {
-            return {
-              description: exercise.description,
-              duration: exercise.duration,
-              date: getDateFormat(exercise.date)
-            };
-          })
-      });
     }
+    
+    return returnLogs(user, res);
+
+  } catch(e){
+    console.log(e);
   }
+
 });
+
+function returnLogs(user, res){
+  return res.json({
+    _id: user._id,
+    username: user.username,
+    count: user.log.length,
+    log: user.log
+      .map(exercise => {
+        return {
+          description: exercise.description,
+          duration: exercise.duration,
+          date: getDateFormat(exercise.date)
+        };
+      })
+  });
+}
 
 function getDateFormat(date) {
   let options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' };
   let result;
   try{
-    result = date.toLocaleString('en-US', options).replace(/\,/g, '').replace(/(\d)/, '0$1');
+    result = date.toLocaleString('en-US', options).replace(/\,/g, '').replace(/ (\d){1} /g, ' 0$1 ');
   } catch(e){
     console.log(e);
   }
